@@ -7,6 +7,7 @@ from app.models.database import DatabaseType
 from app.adapters.base import DatabaseAdapter, ConnectionConfig
 from app.adapters.postgresql import PostgreSQLAdapter
 from app.adapters.mysql import MySQLAdapter
+from app.adapters.sqlite import SQLiteAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class DatabaseAdapterRegistry:
         # Register built-in adapters
         self.register(DatabaseType.POSTGRESQL, PostgreSQLAdapter)
         self.register(DatabaseType.MYSQL, MySQLAdapter)
+        self.register(DatabaseType.SQLITE, SQLiteAdapter)
 
         logger.info(f"Initialized adapter registry with {len(self._adapters)} adapters")
 

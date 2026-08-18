@@ -241,14 +241,23 @@ async def fetch_metadata(
             return json.loads(cached.metadata_json)
 
     # Fetch fresh metadata based on database type
-    pool = await connection_factory.get_connection_pool(db_type, database_name, url)
+    if db_type == DatabaseType.SQLITE:
+        # SQLite uses the adapter directly (no external connection pool).
+        from app.services.database_service import database_service
 
-    if db_type == DatabaseType.POSTGRESQL:
-        metadata_dict = await extract_postgres_metadata(database_name, pool)
-    elif db_type == DatabaseType.MYSQL:
-        metadata_dict = await mysql_metadata.extract_metadata(database_name, pool)
+        metadata_result = await database_service.extract_metadata(
+            db_type, database_name, url
+        )
+        metadata_dict = metadata_result.to_dict()
     else:
-        raise ValueError(f"Unsupported database type: {db_type}")
+        pool = await connection_factory.get_connection_pool(db_type, database_name, url)
+
+        if db_type == DatabaseType.POSTGRESQL:
+            metadata_dict = await extract_postgres_metadata(database_name, pool)
+        elif db_type == DatabaseType.MYSQL:
+            metadata_dict = await mysql_metadata.extract_metadata(database_name, pool)
+        else:
+            raise ValueError(f"Unsupported database type: {db_type}")
 
     # Cache it
     await cache_metadata(session, database_name, metadata_dict)

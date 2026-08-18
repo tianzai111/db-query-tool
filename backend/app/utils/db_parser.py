@@ -29,9 +29,13 @@ def detect_database_type(url: str) -> DatabaseType:
         if scheme in ("mysql", "mysql+pymysql", "mysql+aiomysql"):
             return DatabaseType.MYSQL
 
+        # Handle SQLite (file-based, zero-install -- used for the demo env)
+        if scheme in ("sqlite", "sqlite3"):
+            return DatabaseType.SQLITE
+
         raise ValueError(
             f"Unsupported database type: {scheme}. "
-            f"Supported types: postgresql, postgres, mysql"
+            f"Supported types: postgresql, postgres, mysql, sqlite"
         )
 
     except Exception as e:

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>智能数据库查询工具 · 数据导出演进 Demo</title>
+<style>
+  :root{
+    --bg:#F4EFEA; --ink:#000; --paper:#fff; --accent:#FFDE00; --teal:#16AA98;
+    --line:#000; --muted:#6b6b6b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+  .app{display:flex;min-height:100vh}
+  /* sidebar */
+  .sidebar{width:240px;background:#fff;border-right:3px solid var(--ink);position:fixed;top:0;bottom:0;left:0}
+  .brand{padding:18px 20px;background:var(--accent);border-bottom:3px solid var(--ink);font-weight:800;letter-spacing:.03em}
+  .brand small{display:block;font-weight:600;opacity:.7;font-size:11px;margin-top:2px}
+  .db-item{padding:12px 20px;border-bottom:1px solid #eee;cursor:pointer;font-weight:700;display:flex;align-items:center;gap:8px}
+  .db-item.active{background:#000;color:var(--accent)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--teal)}
+  .side-hint{padding:14px 20px;font-size:12px;color:var(--muted);line-height:1.6}
+  /* schema panel */
+  .schema{width:300px;background:#fff;border-right:2px solid var(--ink);position:fixed;top:0;bottom:0;left:240px;display:flex;flex-direction:column}
+  .schema-head{padding:14px 18px;background:var(--accent);border-bottom:2px solid var(--ink);display:flex;justify-content:space-between;align-items:center;font-weight:800}
+  .schema-body{flex:1;overflow:auto;padding:14px 18px;font-size:13px}
+  .table{margin-bottom:10px;border:1.5px solid var(--ink);border-radius:3px}
+  .table-title{padding:8px 10px;font-weight:700;cursor:pointer;background:#fafafa;border-bottom:1px solid #ddd}
+  .col{padding:4px 10px 4px 18px;color:var(--muted);font-size:12px;display:flex;justify-content:space-between}
+  .col .pk{color:var(--teal);font-weight:700}
+  /* main */
+  .main{margin-left:540px;flex:1;padding:24px;max-width:calc(100vw - 540px)}
+  .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+  .metric{border:2px solid var(--ink);background:#fff;padding:12px;text-align:center;border-radius:3px}
+  .metric .k{font-size:10px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase}
+  .metric .v{font-size:26px;font-weight:800;margin-top:4px}
+  .v.teal{color:var(--teal)}
+  .card{border:2px solid var(--ink);background:#fff;border-radius:3px;margin-bottom:16px}
+  .card-head{padding:12px 16px;border-bottom:2px solid var(--ink);display:flex;justify-content:space-between;align-items:center}
+  .card-title{font-size:13px;font-weight:800;letter-spacing:.04em;text-transform:uppercase}
+  .card-body{padding:16px}
+  textarea{width:100%;min-height:120px;font-family:"Cascadia Code",Consolas,monospace;font-size:13px;padding:12px;border:2px solid var(--ink);border-radius:3px;resize:vertical}
+  .btn{border:2px solid var(--ink);background:#fff;padding:8px 14px;font-weight:800;cursor:pointer;border-radius:3px;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  .btn:hover{background:#f0f0f0}
+  .btn.primary{background:var(--ink);color:var(--accent)}
+  .btn.teal{background:var(--teal);color:#fff;border-color:var(--teal)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .toolbar{display:flex;gap:8px;align-items:center}
+  /* AI prompt */
+  .ai-prompt{background:#FFF8E1;border:2px solid var(--ink);border-radius:3px;padding:12px 14px;margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .ai-ico{font-size:20px}
+  .ai-text{flex:1;min-width:240px;font-size:13px;line-height:1.5}
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{border:1px solid #ddd;padding:7px 10px;text-align:left}
+  th{background:#f5f5f5;font-weight:700;text-transform:uppercase;font-size:11px;letter-spacing:.03em}
+  tr:nth-child(even) td{background:#fafafa}
+  .null{color:#999;font-style:italic}
+  .status{font-size:12px;color:var(--muted);margin-top:8px}
+  .ok{color:var(--teal);font-weight:700}
+  .err{color:#d32;border-weight:700}
+  .badge{display:inline-block;padding:2px 8px;border:1.5px solid var(--ink);border-radius:10px;font-size:11px;font-weight:700;margin-right:6px}
+  .footnote{font-size:12px;color:var(--muted);margin-top:8px}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:var(--ink);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .examples{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .chip{border:1.5px dashed #999;padding:4px 10px;border-radius:14px;font-size:11px;cursor:pointer;background:#fafafa}
+  .chip:hover{border-style:solid;border-color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- DB sidebar -->
+  <aside class="sidebar">
+    <div class="brand">DB QUERY TOOL<small>Export Feature Demo · SQLite</small></div>
+    <div class="db-item active"><span class="dot"></span> demo</div>
+    <div class="side-hint">
+      演示数据库已自动注册（零安装 SQLite）。<br/><br/>
+      含 <b>departments</b> / <b>employees</b> / <b>salaries</b> 三张表及中文示例数据。
+    </div>
+  </aside>
+
+  <!-- schema panel -->
+  <section class="schema">
+    <div class="schema-head"><span>📋 demo</span><span class="btn" style="padding:4px 8px;font-size:10px">REFRESH</span></div>
+    <div class="schema-body" id="schema">loading schema…</div>
+  </section>
+
+  <!-- main -->
+  <main class="main">
+    <div class="metrics">
+      <div class="metric"><div class="k">Tables</div><div class="v" id="m-tables">-</div></div>
+      <div class="metric"><div class="k">Employees</div><div class="v" id="m-emp">-</div></div>
+      <div class="metric"><div class="k">Rows</div><div class="v teal" id="m-rows">0</div></div>
+      <div class="metric"><div class="k">Time</div><div class="v teal" id="m-time">-</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Query Editor</span>
+        <div class="toolbar">
+          <button class="btn" onclick="doExport('csv')" id="btn-quick-csv">⬇ CSV</button>
+          <button class="btn" onclick="doExport('json')" id="btn-quick-json">⬇ JSON</button>
+          <button class="btn primary" onclick="runQuery()" id="btn-run">▶ Execute</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <textarea id="sql">SELECT e.name AS 姓名, d.name AS 部门, e.role AS 职位, e.hire_date AS 入职日期
+FROM employees e
+JOIN departments d ON e.department_id = d.id
+ORDER BY e.id</textarea>
+        <div class="examples">
+          <span class="chip" onclick="setSql(1)">员工列表</span>
+          <span class="chip" onclick="setSql(2)">部门人数/均薪</span>
+          <span class="chip" onclick="setSql(3)">薪资历史</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="card-title">Results <span id="r-meta" style="color:#666;text-transform:none;font-weight:400"></span></span>
+        <div class="toolbar">
+          <span class="badge" id="b-csv">CSV (UTF-8 BOM)</span>
+          <span class="badge" id="b-json">JSON + metadata</span>
+          <button class="btn teal" onclick="doExport('csv')" id="btn-exp-csv">Export CSV</button>
+          <button class="btn teal" onclick="doExport('json')" id="btn-exp-json">Export JSON</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <!-- proactive AI prompt (appears after a successful query) -->
+        <div class="ai-prompt" id="ai-prompt" style="display:none">
+          <span class="ai-ico">🤖</span>
+          <div class="ai-text"><b>AI 助手：</b>您的查询返回了 <b id="ai-rows">0</b> 行数据。是否需要将本次查询结果导出为 <b>CSV</b> 或 <b>JSON</b>？</div>
+          <button class="btn" onclick="doExport('csv')">Export CSV</button>
+          <button class="btn" onclick="doExport('json')">Export JSON</button>
+        </div>
+        <div id="table-wrap"></div>
+        <div class="status" id="status">Ready.</div>
+      </div>
+    </div>
+
+    <div class="footnote">
+      本页直连后端 <code id="api-base"></code>。导出由后端
+      <code>POST /api/v1/dbs/demo/export</code> 单次完成"执行 SQL + 返回文件"，对应 Claude Code 自定义命令
+      <code>/export-query</code> 与 Cursor Agent 规则中的五步任务分解。
+    </div>
+  </main>
+</div>
+
+<script>
+const API = "http://localhost:8000";
+document.getElementById("api-base").textContent = API;
+let lastResult = null;
+
+const SQLS = {
+  1: `SELECT e.name AS 姓名, d.name AS 部门, e.role AS 职位, e.hire_date AS 入职日期
+FROM employees e JOIN departments d ON e.department_id = d.id ORDER BY e.id`,
+  2: `SELECT d.name AS department, COUNT(*) AS headcount, ROUND(AVG(s.amount),0) AS avg_salary
+FROM employees e JOIN departments d ON e.department_id=d.id
+JOIN salaries s ON s.employee_id=e.id GROUP BY d.name ORDER BY headcount DESC`,
+  3: `SELECT e.name AS 姓名, s.amount AS 薪资, s.currency AS 币种, s.effective_date AS 生效日期
+FROM salaries s JOIN employees e ON e.id=s.employee_id ORDER BY e.id, s.effective_date`
+};
+function setSql(n){ document.getElementById("sql").value = SQLS[n]; }
+
+async function loadSchema(){
+  try{
+    const r = await fetch(API+"/api/v1/dbs/demo");
+    const m = await r.json();
+    document.getElementById("m-tables").textContent = m.tables.length;
+    const emp = m.tables.find(t=>t.name==="employees");
+    document.getElementById("m-emp").textContent = emp ? emp.rowCount : "-";
+    const box = document.getElementById("schema");
+    box.innerHTML = m.tables.map(t=>`
+      <div class="table">
+        <div class="table-title">▸ ${t.name} <span style="color:#999;font-weight:400">(${t.rowCount||"?"} rows)</span></div>
+        ${t.columns.map(c=>`<div class="col"><span>${c.primaryKey?'<span class="pk">🔑</span> ':''}${c.name}</span><span>${c.dataType}</span></div>`).join("")}
+      </div>`).join("");
+  }catch(e){ document.getElementById("schema").textContent = "无法连接后端，请确认后端运行在 :8000"; }
+}
+
+function fmt(v){ if(v===null||v===undefined) return '<span class="null">NULL</span>'; return String(v); }
+
+function renderTable(res){
+  const cols = res.columns.map(c=>c.name);
+  let html = '<table><thead><tr>'+cols.map(c=>`<th>${c}</th>`).join("")+'</tr></thead><tbody>';
+  html += res.rows.map(row=>'<tr>'+cols.map(c=>`<td>${fmt(row[c])}</td>`).join("")+'</tr>').join("");
+  html += '</tbody></table>';
+  document.getElementById("table-wrap").innerHTML = html;
+}
+
+async function runQuery(){
+  const sql = document.getElementById("sql").value.trim();
+  const status = document.getElementById("status");
+  status.innerHTML = '<span class="spinner"></span> 正在执行查询…';
+  document.getElementById("btn-run").disabled = true;
+  try{
+    const r = await fetch(API+"/api/v1/dbs/demo/query",{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({sql})
+    });
+    if(!r.ok){ const e=await r.json(); throw new Error(e.detail||"Query failed"); }
+    const res = await r.json();
+    lastResult = res;
+    renderTable(res);
+    document.getElementById("m-rows").textContent = res.rowCount;
+    document.getElementById("m-time").textContent = res.executionTimeMs+"ms";
+    document.getElementById("r-meta").textContent = `· ${res.rowCount} rows · ${res.executionTimeMs}ms`;
+    status.innerHTML = `<span class="ok">✓ 查询成功</span> — ${res.rowCount} 行 / ${res.executionTimeMs}ms`;
+    // show proactive AI prompt
+    const prompt = document.getElementById("ai-prompt");
+    if(res.rowCount>0){ document.getElementById("ai-rows").textContent = res.rowCount; prompt.style.display="flex"; }
+    else prompt.style.display="none";
+  }catch(e){
+    status.innerHTML = `<span class="err">✗ ${e.message}</span>`;
+    document.getElementById("ai-prompt").style.display="none";
+  }finally{ document.getElementById("btn-run").disabled=false; }
+}
+
+async function doExport(fmt){
+  const sql = document.getElementById("sql").value.trim();
+  const status = document.getElementById("status");
+  if(!sql){ alert("请先输入 SQL"); return; }
+  status.innerHTML = `<span class="spinner"></span> 正在导出 ${fmt.toUpperCase()}（后端执行 SQL + 生成文件）…`;
+  try{
+    const r = await fetch(API+`/api/v1/dbs/demo/export`,{
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({sql, format:fmt})
+    });
+    if(!r.ok){ const e=await r.json(); throw new Error(e.detail||"Export failed"); }
+    const blob = await r.blob();
+    let filename = `demo_query.${fmt}`;
+    const disp = r.headers.get("content-disposition");
+    if(disp){ const m=/filename="?([^"]+)"?/.exec(disp); if(m) filename=m[1]; }
+    const url = URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=filename; a.click();
+    URL.revokeObjectURL(url);
+    status.innerHTML = `<span class="ok">✓ 已导出 ${filename}</span> (${(blob.size/1024).toFixed(1)} KB)`;
+  }catch(e){
+    status.innerHTML = `<span class="err">✗ ${e.message}</span>`;
+  }
+}
+
+loadSchema();
+</script>
+</body>
+</html>

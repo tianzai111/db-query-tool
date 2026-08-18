@@ -11,20 +11,31 @@ class SqlValidationError(Exception):
     pass
 
 
+def _dialect_for(db_type: DatabaseType) -> str:
+    """Map a DatabaseType to the sqlglot dialect name."""
+    if db_type == DatabaseType.POSTGRESQL:
+        return "postgres"
+    if db_type == DatabaseType.MYSQL:
+        return "mysql"
+    if db_type == DatabaseType.SQLITE:
+        return "sqlite"
+    return "postgres"
+
+
 def validate_sql(sql: str, db_type: DatabaseType = DatabaseType.POSTGRESQL) -> tuple[bool, str | None]:
     """
     Validate SQL query using sqlglot.
 
     Args:
         sql: SQL query string to validate
-        db_type: Database type (PostgreSQL or MySQL)
+        db_type: Database type (PostgreSQL, MySQL or SQLite)
 
     Returns:
         Tuple of (is_valid, error_message)
     """
     try:
         # Determine dialect
-        dialect = "postgres" if db_type == DatabaseType.POSTGRESQL else "mysql"
+        dialect = _dialect_for(db_type)
 
         # Parse SQL
         parsed = sqlglot.parse_one(sql, dialect=dialect)
@@ -49,14 +60,14 @@ def add_limit_if_missing(sql: str, limit: int = 1000, db_type: DatabaseType = Da
     Args:
         sql: SQL query string
         limit: Maximum number of rows to return (default: 1000)
-        db_type: Database type (PostgreSQL or MySQL)
+        db_type: Database type (PostgreSQL, MySQL or SQLite)
 
     Returns:
         SQL query with LIMIT clause added if missing
     """
     try:
         # Determine dialect
-        dialect = "postgres" if db_type == DatabaseType.POSTGRESQL else "mysql"
+        dialect = _dialect_for(db_type)
 
         parsed = sqlglot.parse_one(sql, dialect=dialect)
         if parsed is None:

@@ -1,65 +1,89 @@
-# 智能数据库查询工具 v2.0
+# Database Query Tool
 
-> 实战作业（一）：为"数据库查询工具"添加数据导出功能
+A web-based tool for managing PostgreSQL database connections, viewing metadata, and executing SQL queries with natural language support.
 
-## 功能特性
+## Project Structure
 
-- SQL 查询执行（仅允许 SELECT，安全防护）
-- 数据导出：CSV（UTF-8 BOM 兼容 Excel）和 JSON（含元数据）
-- AI Agent 自动化：任务分解 → 子任务编排 → 一键导出
-- 自定义命令系统：`/query`、`/export`、`/run` 等
-- 交互式 CLI：查询后主动询问是否导出
-- 示例数据库：users / products / orders 三表
+```
+w2/db_query/
+├── backend/          # FastAPI backend (Python 3.12+)
+├── frontend/         # React frontend (TypeScript, Refine 5)
+├── fixtures/         # REST Client test files
+│   ├── test.rest     # API test requests
+│   └── README.md     # Testing guide
+└── Makefile          # Development commands
+```
 
-## 快速开始
+## Quick Start
+
+### Initial Setup
 
 ```bash
-# 1. 初始化示例数据库
-python setup_db.py
+# Install all dependencies
+make install
 
-# 2. 运行演示（自动展示全部功能）
-python main.py --demo
+# Setup database and environment
+make setup
+# Then edit backend/.env and add your OPENAI_API_KEY
 
-# 3. 交互模式
-python main.py
+# Start development servers
+make dev
 ```
 
-## 命令列表
+### Development Commands
 
-| 命令 | 说明 | 示例 |
-|------|------|------|
-| `/tables` | 查看所有表 | `/tables` |
-| `/schema <表名>` | 查看表结构 | `/schema users` |
-| `/query <sql>` | 执行查询 | `/query SELECT * FROM users LIMIT 5` |
-| `/export <格式>` | 导出上次结果 | `/export csv` / `/export json` / `/export all` |
-| `/run <sql> [格式]` | 一键查询+导出 | `/run SELECT * FROM users LIMIT 10 csv` |
-| `/help` | 帮助 | `/help` |
-| `/exit` | 退出 | `/exit` |
+```bash
+# View all available commands
+make help
 
-也可以直接输入 SQL 语句，查询后系统会主动提示导出。
+# Start backend only
+make dev-backend
 
-## 项目结构
+# Start frontend only
+make dev-frontend
 
-```
-db_query_tool/
-├── main.py            # 主程序入口
-├── database.py        # 数据库管理模块
-├── exporter.py        # 数据导出模块 (CSV/JSON)
-├── agent.py           # AI Agent 任务分解与自动化
-├── commands.py        # 自定义命令系统
-├── setup_db.py        # 示例数据库初始化
-├── FEATURE_EXPORT.md  # 功能设计文档
-├── README.md          # 项目说明
-└── exports/           # 导出文件目录
+# Run tests
+make test
+
+# Format code
+make format
+
+# Run linters
+make lint
 ```
 
-## 依赖
+## API Testing
 
-- Python 3.10+
-- 仅使用标准库，无需安装第三方包
+### Using REST Client (VSCode)
 
-## 技术要点
+1. Install [REST Client extension](https://marketplace.visualstudio.com/items?itemName=humao.rest-client)
+2. Open `fixtures/test.rest`
+3. Click "Send Request" above any HTTP request
+4. View responses in VSCode panel
 
-1. **代码库理解与扩展**：模块化设计，各层职责清晰，新增导出功能不影响原有查询逻辑
-2. **AI Agent 任务分解**：将"导出数据"分解为 5 个子任务（获取结果→验证→格式化→创建文件→摘要）
-3. **工具链整合**：Cursor 负责快速代码生成，Claude Code 负责多步骤自动化编排
+See `fixtures/README.md` for detailed testing guide.
+
+### Using Makefile
+
+```bash
+# Check if backend is running
+make health
+
+# Open API documentation
+make docs
+```
+
+## Phase 1 Status
+
+✅ **Phase 1 Complete**: All setup and foundation tasks completed.
+
+- Backend project structure initialized
+- Frontend project structure initialized
+- Core infrastructure (FastAPI, database, models) ready
+- Data models defined with camelCase API convention
+- Makefile with common development tasks
+- REST Client test file for API testing
+
+## Next Steps
+
+Proceed to Phase 2 for core feature implementation (US1 + US2).

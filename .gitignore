@@ -1,4 +1,38 @@
-﻿__pycache__/
-*.pyc
-data.db
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+dist/
+build/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+yarn-error.log*
+
+# Environment / secrets
+.env
+.env.local
+backend/.env
+frontend/.env.local
+
+# Database / local data
+*.db
+*.sqlite
+*.sqlite3
 exports/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.log

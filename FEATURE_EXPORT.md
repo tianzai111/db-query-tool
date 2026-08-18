@@ -1,255 +1,279 @@
-# FEATURE_EXPORT.md — 数据导出功能设计文档
+# FEATURE_EXPORT — 数据导出功能模块设计文档
 
-## 一、功能概述
+> 作业：在使用 Cursor 构建的"智能数据库查询工具"基础上，新增**数据导出功能模块**。
+> 本文档说明新增功能的设计思路、任务分解、实现细节与验证方法。
 
-在原有"智能数据库查询工具"基础上，新增 **数据导出功能模块**，支持将 SQL 查询结果导出为 **CSV** 和 **JSON** 两种格式，并通过 AI Agent 自动化流程实现"查询 + 导出"一键完成。
+## 1. 需求回顾
 
-### 核心目标
+来自《实战作业（一）要求》：
 
-| 目标 | 说明 |
-|------|------|
-| 导出格式支持 | CSV（兼容 Excel 打开，UTF-8 BOM 编码）、JSON（含元数据结构） |
-| 自动化流程 | 通过 Agent 子任务编排，一条命令完成"查询 → 验证 → 格式化 → 导出" |
-| 用户交互 | 查询后主动提示导出选项，支持自然语言式命令输入 |
+1. **导出格式**：支持将查询结果导出为至少两种格式（CSV、JSON）。
+2. **自动化工作流**：使用 Claude Code 的 Agent 或自定义 Command，设计自动化步骤，使"执行查询"和"导出结果"可一键完成或由简单命令触发。
+3. **用户交互**：查询后，AI 助手主动询问"是否需要将本次查询结果导出为 CSV 或 JSON？"。
+4. **核心练习点**：
+   - 代码库理解与扩展；
+   - AI Agent 任务分解（把"导出数据"拆成"获取结果 / 校验 / 格式化 / 生成文件 / 汇总"等子任务）；
+   - 工具链配合（Cursor 生成代码，Claude Code 做多步骤自动化）。
+5. **交付物**：更新后的项目代码 + 本设计文档 `FEATURE_EXPORT.md`。
 
----
+## 2. 现有代码库分析
 
-## 二、设计思路
-
-### 2.1 架构分层
+官方仓库 `w2/db_query` 是一个 FastAPI + React/TypeScript 的全栈项目：
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  用户交互层 (main.py)                │
-│     交互式 CLI / 演示模式 / 自然语言入口               │
-├─────────────────────────────────────────────────────┤
-│              自定义命令层 (commands.py)               │
-│   /query  /export  /run  /tables  /schema  /help    │
-├─────────────────────────────────────────────────────┤
-│              AI Agent 层 (agent.py)                  │
-│   任务分解 → 子任务编排 → 结果传递 → 日志记录          │
-├──────────────────┬──────────────────────────────────┤
-│  数据库层          │    导出层 (exporter.py)           │
-│  (database.py)   │    CSV / JSON 格式化与文件写入     │
-│  连接·查询·结果    │                                  │
-└──────────────────┴──────────────────────────────────┘
+backend/app/
+├── api/v1/queries.py        # 查询相关 REST 接口
+├── services/
+│   ├── query.py             # 查询历史保存
+│   ├── query_wrapper.py     # 执行查询并落历史
+│   ├── database_service.py  # 通过 adapter 执行 SQL
+│   ├── sql_validator.py     # 只读校验 + LIMIT 注入
+│   └── connection_factory.py
+├── adapters/                # PostgreSQL / MySQL 适配器
+├── models/schemas.py        # Pydantic 请求/响应模型（camelCase）
+└── main.py                  # FastAPI 入口
+
+frontend/src/
+├── pages/Home.tsx           # 主工作台（SQL 编辑器 + 结果表）
+├── pages/queries/execute.tsx
+├── components/ResultTable.tsx
+├── services/api.ts          # axios 客户端
+└── types/query.ts
 ```
 
-### 2.2 模块职责
+关键事实：
+- `POST /api/v1/dbs/{name}/query` 已返回 `QueryResult{columns, rows, rowCount, executionTimeMs, sql}`。
+- 前端 `Home.tsx` 原本带有一段**内联**的 CSV/JSON 导出逻辑，但仅在浏览器端拼接字符串，没有后端导出接口，无法被脚本 / Agent 一键调用，也缺少主动提示与可复用组件。
+- 后端已有完善的 SQL 只读校验（`validate_and_transform_sql`）与查询历史记录，导出功能应**复用**这些能力，而不是重新连接数据库。
 
-| 模块 | 文件 | 职责 |
-|------|------|------|
-| 数据库管理 | `database.py` | 数据库连接、SQL 执行、查询结果封装（QueryResult） |
-| 数据导出 | `exporter.py` | CSV/JSON 格式化、文件创建、摘要生成 |
-| AI Agent | `agent.py` | 任务分解、子任务编排、工作流日志、错误处理 |
-| 命令系统 | `commands.py` | 自定义命令注册与调度、自动化命令 `/run` |
-| 主程序 | `main.py` | 交互式 CLI、演示模式、自然语言入口 |
-| 数据初始化 | `setup_db.py` | 示例数据库创建（users/products/orders 三表） |
+## 3. 设计目标与原则
 
----
+| 目标 | 设计决策 |
+| --- | --- |
+| 至少支持 CSV、JSON | 后端 `ExportFormat` 枚举 + 前端 `ExportFormat` 类型 |
+| 一键"执行+导出" | 新增 `POST /api/v1/dbs/{name}/export`，单次请求完成 SQL 执行与文件下载 |
+| 主动询问导出 | 新增前端 `ExportPrompt` 组件，查询成功且有数据时自动出现 |
+| 可复用、可测试 | 把格式化逻辑抽到纯函数服务 `services/export.py`，与 HTTP 层解耦 |
+| 中文/Excel 友好 | CSV 使用 **UTF-8 BOM** + CRLF（RFC 4180），Excel 直接双击不乱码 |
+| JSON 自带上下文 | JSON 包含 `metadata`（列、SQL、行数、耗时、生成时间）与 `rows` |
+| Agent 可调用 | 提供 Claude Code 自定义命令 `/export-query`、Cursor 规则、CLI 脚本 |
+| 安全 | 导出同样走只读校验，禁止 INSERT/UPDATE/DELETE/DDL |
 
-## 三、功能实现详解
+## 4. 架构与数据流
 
-### 3.1 导出格式支持
+### 4.1 两种导出路径
 
-#### CSV 导出
-- 使用 Python 标准库 `csv` 模块
-- 编码：UTF-8 with BOM（`utf-8-sig`），确保 Excel 正确显示中文
-- 结构：第一行为列名，后续为数据行
+1. **客户端导出（即时）**：结果已经在浏览器中，直接在前端把 `QueryResult` 序列化为 CSV/JSON 并下载，零额外请求。
+2. **服务端导出（一键自动化）**：Agent / 脚本 / 工具栏调用后端 `/export`，后端执行 SQL（复用校验、连接池、历史记录），再以文件流返回。适合"无需先在界面查询，直接出文件"的自动化场景。
 
+```
+                       ┌──────────────────────────────┐
+   UI / Agent / CLI ──►│ POST /dbs/{name}/export       │
+                       │  { sql, format: csv|json }    │
+                       └──────────────┬───────────────┘
+                                      │
+                    ┌─────────────────▼──────────────────┐
+                    │ execute_query_with_service()        │
+                    │  (SQL 校验 / 连接池 / 写历史)        │
+                    └─────────────────┬──────────────────┘
+                                      │ QueryResult
+                    ┌─────────────────▼──────────────────┐
+                    │ services/export.py                 │
+                    │  _to_csv() / _to_json()            │
+                    │  build_filename()                  │
+                    └─────────────────┬──────────────────┘
+                                      │ bytes + filename
+                                      ▼
+                              Response(attachment)
+```
+
+### 4.2 AI Agent 任务分解
+
+把"导出数据"拆成 5 个可独立验证的子任务（对应 `cursor/rules` 与 Claude 命令）：
+
+1. **获取查询结果**：调用 `/query` 或 `/export`，复用已有服务。
+2. **校验**：确认是只读 `SELECT`，确认结果非空。
+3. **格式化**：CSV（BOM + 转义）或 JSON（metadata + rows）。
+4. **生成文件**：返回 `Content-Disposition: attachment`，文件名 `<db>_query_<UTC时间戳>.<ext>`。
+5. **汇总反馈**：输出文件名、大小、行数。
+
+## 5. 后端实现
+
+### 5.1 新增文件
+
+**`backend/app/services/export.py`**（核心、纯函数、易测试）：
+- `ExportFormat` 枚举：`csv` / `json`，提供 `from_string()`、`media_type`、`file_extension`。
+- `_to_csv(result)`：使用 `csv.writer`，CRLF 换行，输出 UTF-8 BOM。
+- `_to_json(result, database_name)`：结构化输出，`_json_safe()` 统一处理 `datetime`/`Decimal`/`UUID` 等不可直接序列化的类型。
+- `build_filename(db, fmt, timestamp)`：生成确定性文件名，如 `mydb_query_20260422T103000Z.csv`。
+- `export_result(result, fmt, database_name)` -> `(bytes, filename)` 对外统一入口。
+
+### 5.2 修改文件
+
+**`backend/app/models/schemas.py`** —— 新增请求模型：
 ```python
-with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
-    writer = csv.writer(f)
-    writer.writerow(result.columns)
-    writer.writerows(result.rows)
+class ExportRequest(BaseModel):
+    sql: str = Field(..., min_length=1)
+    format: Literal["csv", "json"] = "csv"
 ```
 
-#### JSON 导出
-- 使用 Python 标准库 `json` 模块
-- 包含 `metadata`（导出时间、行数、执行耗时、SQL、列名）和 `data`（字典列表）两部分
-- `ensure_ascii=False` 保留中文原文
+**`backend/app/api/v1/queries.py`** —— 新增接口：
+```
+POST /api/v1/dbs/{name}/export
+Body: { "sql": "...", "format": "csv" }
+Response: 文件流（Content-Type: text/csv 或 application/json；
+          Content-Disposition: attachment; filename="..."）
+```
+错误处理：连接不存在返回 404，格式非法返回 400，SQL 校验失败返回 400，执行失败返回 500。该接口内部直接调用已有的 `execute_query_with_service()`，因此自动获得：SQL 只读校验、LIMIT 保护、PostgreSQL/MySQL 双适配、查询历史记录。
 
+### 5.3 单元测试
+
+**`backend/tests/unit/test_export.py`** 覆盖：
+- 格式解析大小写不敏感、非法格式抛错；
+- CSV 以 BOM 开头、表头正确、含逗号的值被引号包裹、`None` 输出为空；
+- JSON 包含 `metadata`（database/rowCount/sql/columns）与 `rows`；
+- 文件名生成确定性。
+
+## 6. 前端实现
+
+### 6.1 新增文件
+
+| 文件 | 作用 |
+| --- | --- |
+| `frontend/src/services/export.ts` | 导出工具：`resultToCsv`/`resultToJson`、`exportResultClient`（浏览器端）、`exportResultServer`（调用后端 `/export`，支持进度回调、解析 `Content-Disposition` 文件名） |
+| `frontend/src/components/ExportButtons.tsx` | 可复用 CSV/JSON 按钮组，支持普通双按钮与 `compact` 下拉两种形态 |
+| `frontend/src/components/ExportPrompt.tsx` | AI 助手主动提示条："您的查询返回 N 行，是否导出为 CSV 或 JSON？"，带一键按钮与关闭 |
+
+### 6.2 修改文件
+
+- **`pages/Home.tsx`**：
+  - 删除原本散落的 `handleExportCSV/exportToCSV/...` 内联逻辑，统一为 `handleExport(format)`（客户端导出已加载结果）与 `handleQuickExport(format)`（走后端一键导出）。
+  - 查询成功且 `rowCount > 0` 时 `setShowExportPrompt(true)`，在结果卡片顶部渲染 `ExportPrompt`。
+  - 结果卡片右上角用 `ExportButtons`；SQL 编辑器右上角新增 `EXPORT` 下拉（一键"执行+导出"，无需先点 Execute）。
+  - 超过 1 万行时弹出大结果集确认框。
+- **`components/ResultTable.tsx`**：工具栏内置 `ExportButtons`，所有使用该组件的页面（如 `pages/queries/execute.tsx`）自动获得导出能力。
+
+### 6.3 交互效果
+
+1. 用户执行 SQL → 成功返回数据。
+2. 结果区顶部出现黄色 AI 提示条："AI Assistant: Your query returned N rows. Would you like to export as CSV or JSON?"
+3. 点击 `Export CSV` / `Export JSON` 立即下载；也可点结果卡片右上角按钮，或编辑器右上角 `EXPORT` 下拉一键执行并下载。
+4. 下载文件名形如 `mydb_query_20260422T103000Z.csv`。
+
+## 7. 自动化工作流（Agent / Command / CLI）
+
+### 7.1 Claude Code 自定义命令
+
+`.claude/commands/export-query.md` 定义 `/export-query` 斜杠命令，参数为 `<database-name> "<SQL>" [csv|json]`，明确 5 步工作流（识别目标 → 校验只读 → 调用 `/export` → 校验输出 → 汇总），并给出 curl 示例：
+```bash
+curl -X POST http://localhost:8000/api/v1/dbs/mydb/export \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"SELECT id, name FROM users LIMIT 100","format":"csv"}' \
+  -o users.csv
+```
+
+### 7.2 Cursor 规则
+
+`.cursor/rules/export-feature.mdc` 在涉及导出相关文件时自动加载，把"导出数据"任务分解为 5 个子任务，并约束：只读、BOM、必须写测试、保持 camelCase。
+
+### 7.3 CLI 脚本
+
+`backend/scripts/export_query.py` 提供命令行一键导出，既可调用运行中的后端（HTTP 模式，仅用标准库），也可 `--standalone` 在进程内直连数据库：
+```bash
+python scripts/export_query.py mydb "SELECT id, name FROM users LIMIT 10" --format csv --out ./exports
+python scripts/export_query.py postgresql://... "SELECT 1" --standalone --format json
+```
+
+## 8. 接口示例
+
+请求：
+```http
+POST /api/v1/dbs/interview/export
+Content-Type: application/json
+
+{ "sql": "SELECT id, name FROM candidates ORDER BY id LIMIT 3", "format": "json" }
+```
+
+JSON 响应体：
 ```json
 {
   "metadata": {
-    "export_time": "2026-07-29T14:30:00",
-    "row_count": 20,
-    "execution_time_sec": 0.0012,
-    "sql": "SELECT * FROM users",
-    "columns": ["id", "name", "email", "department", "salary"]
+    "database": "interview",
+    "generatedAt": "2026-04-22T10:30:00.123456+00:00",
+    "rowCount": 3,
+    "executionTimeMs": 8,
+    "sql": "SELECT id, name FROM candidates ORDER BY id LIMIT 3",
+    "columns": [
+      { "name": "id", "dataType": "integer" },
+      { "name": "name", "dataType": "character varying" }
+    ]
   },
-  "data": [
-    {"id": 1, "name": "张伟", "email": "user01@example.com", ...},
-    ...
+  "rows": [
+    { "id": 1, "name": "Alice" },
+    { "id": 2, "name": "Bob, Jr." },
+    { "id": 3, "name": null }
   ]
 }
 ```
 
-### 3.2 自动化流程设计（AI Agent）
-
-#### 任务分解
-
-"导出数据"被分解为 5 个子任务，Agent 按顺序编排执行：
-
+CSV 响应（文本，首字节为 BOM）：
 ```
-[1.获取查询结果] → [2.验证数据] → [3.格式化数据] → [4.创建文件] → [5.生成摘要]
+id,name
+1,Alice
+2,"Bob, Jr."
+3,
 ```
 
-| 子任务 | 输入 | 输出 | 失败处理 |
-|--------|------|------|----------|
-| 1. 获取查询结果 | SQL 语句 | QueryResult 对象 | 返回错误，中止流程 |
-| 2. 验证数据 | QueryResult | bool（通过/不通过） | 空结果或无列信息则中止 |
-| 3. 格式化数据 | QueryResult + 格式 | 格式化后的数据 | 异常则中止 |
-| 4. 创建文件 | 格式化数据 + 路径 | 文件路径 | 写入失败则中止 |
-| 5. 生成摘要 | QueryResult + 文件路径 | 摘要字符串 | 非关键步骤 |
+## 9. 验证方法
 
-#### Agent 工作流日志
-
-Agent 在每个子任务执行时记录日志，可视化展示执行过程：
-
-```
-  1. [OK] fetch_query_result: 查询成功，返回 20 行，耗时 0.0012s
-  2. [OK] validate_data: 验证通过: 6 列, 20 行
-  3. [OK] format_data: 数据格式化完成
-  4. [OK] create_file: 文件已创建: exports/query_result_20260729.csv
-  5. [OK] generate_summary: 摘要生成完成
-  6. [OK] workflow_complete: 导出完成: exports/query_result_20260729.csv
-```
-
-#### 核心代码
-
-```python
-class ExportAgent:
-    def run_export_workflow(self, sql, format_type="csv", filename=None):
-        # 子任务 1: 获取查询结果
-        result = self._task_fetch_query_result(sql)
-        if result is None:
-            return {"success": False, ...}
-
-        # 子任务 2: 验证数据
-        if not self._task_validate_data(result):
-            return {"success": False, ...}
-
-        # 子任务 3 & 4: 格式化 + 创建文件
-        filepath = self._task_format_and_create_file(result, format_type, filename)
-
-        # 子任务 5: 生成摘要
-        summary = self._task_generate_summary(result, filepath)
-
-        return {"success": True, "filepath": filepath, ...}
-```
-
-### 3.3 自定义命令系统
-
-模拟 Claude Code 的自定义 Command 功能，注册了以下命令：
-
-| 命令 | 功能 | 对应作业要求 |
-|------|------|-------------|
-| `/tables` | 查看所有表 | 代码库理解 |
-| `/schema <table>` | 查看表结构 | 代码库理解 |
-| `/query <sql>` | 执行查询 | 基础功能 |
-| `/export <format>` | 导出上次结果 | 导出功能 |
-| `/run <sql> [format]` | 一键查询+导出 | **自动化流程** |
-| `/help` | 帮助 | 用户交互 |
-| `/exit` | 退出 | — |
-
-`/run` 是自动化核心命令，它调用 Agent 的 `run_export_workflow` 方法，一条命令完成从查询到导出的全部步骤。
-
-### 3.4 用户交互设计
-
-#### 交互模式 1：分步操作
-```
-用户: /query SELECT * FROM users LIMIT 5
-系统: 查询成功! 返回 5 行...
-      > 需要将这次查询结果导出为 CSV 或 JSON 文件吗？
-      输入 /export csv 或 /export json 或 /export all 进行导出
-
-用户: /export json
-系统: 导出完成! 文件: exports/query_result_20260729.json
-```
-
-#### 交互模式 2：一键自动化
-```
-用户: /run SELECT * FROM users LIMIT 5 json
-系统: [Agent] 启动自动化工作流...
-      1. [OK] fetch_query_result: ...
-      2. [OK] validate_data: ...
-      3. [OK] format_data: ...
-      4. [OK] create_file: ...
-      5. [OK] generate_summary: ...
-      导出完成!
-```
-
-#### 交互模式 3：直接 SQL
-```
-用户: SELECT name, salary FROM users WHERE salary > 10000
-系统: 查询成功! ...
-      > 需要将这次查询结果导出为 CSV 或 JSON 文件吗？
-```
-
----
-
-## 四、工具链整合思考
-
-### Cursor 与 Claude Code 的协同
-
-| 工具 | 优势 | 在本项目中的应用 |
-|------|------|-----------------|
-| Cursor | 快速代码生成、实时补全、文件级编辑 | 快速编写 `database.py`、`exporter.py` 等模块代码；实时调试 SQL 查询逻辑 |
-| Claude Code | 多步骤自动化、Agent 任务编排、自定义命令 | 实现 `/run` 自动化命令；Agent 将导出任务分解为子任务链；工作流日志可视化 |
-
-### 结合方式
-1. **开发阶段**：使用 Cursor 快速生成和迭代各模块代码，利用 AI 补全提高效率
-2. **集成阶段**：使用 Claude Code 设计 Agent 工作流，将分散功能编排为自动化流程
-3. **验证阶段**：通过 `/run` 命令一键验证"查询 + 导出"全链路
-
----
-
-## 五、使用方法
-
-### 快速开始
-
+### 9.1 后端单元测试
 ```bash
-# 初始化示例数据库
-python setup_db.py
-
-# 交互模式
-python main.py
-
-# 演示模式（自动展示所有功能）
-python main.py --demo
+cd backend
+uv run pytest tests/unit/test_export.py -v
 ```
 
-### 导出示例
-
+### 9.2 手动验证（后端 + 前端）
 ```bash
-# 交互模式中
-db> /query SELECT * FROM users LIMIT 10
-db> /export csv
+make dev            # 启动后端 :8000 与前端 :5173
+```
+1. 在界面注册一个 PostgreSQL/MySQL 连接并刷新元数据；
+2. 执行 `SELECT ...`，确认出现 AI 导出提示；
+3. 分别点击 CSV / JSON，验证文件下载且 Excel 打开 CSV 不乱码；
+4. 使用编辑器右上角 `EXPORT` 下拉，验证"一键执行+导出"；
+5. 用 curl 或 CLI 脚本调用 `/export`，验证自动化链路。
 
-# 一键模式
-db> /run SELECT * FROM users LIMIT 10 csv
-db> /run SELECT department, AVG(salary) as avg FROM users GROUP BY department json
+### 9.3 自动化验证
+```bash
+# HTTP 模式（后端需在运行）
+python backend/scripts/export_query.py mydb "SELECT count(*) FROM users" --format json
+
+# Claude Code 中
+/export-query mydb "SELECT * FROM users LIMIT 100" csv
 ```
 
-### 导出文件位置
+## 10. 改动文件清单
 
-所有导出文件保存在 `exports/` 目录下：
-```
-exports/
-├── query_result_20260729_143000.csv
-├── query_result_20260729_143000.json
-└── ...
-```
+**新增**
+- `backend/app/services/export.py`
+- `backend/tests/unit/test_export.py`
+- `backend/scripts/export_query.py`
+- `frontend/src/services/export.ts`
+- `frontend/src/components/ExportButtons.tsx`
+- `frontend/src/components/ExportPrompt.tsx`
+- `.claude/commands/export-query.md`
+- `.cursor/rules/export-feature.mdc`
+- `FEATURE_EXPORT.md`（本文档）
 
----
+**修改**
+- `backend/app/models/schemas.py`（新增 `ExportRequest`）
+- `backend/app/api/v1/queries.py`（新增 `/export` 接口）
+- `frontend/src/pages/Home.tsx`（接入主动提示、复用组件、一键导出）
+- `frontend/src/components/ResultTable.tsx`（内置导出按钮）
 
-## 六、扩展性设计
+## 11. 设计亮点
 
-当前架构支持以下扩展方向：
-
-1. **新增导出格式**：在 `exporter.py` 的 `SUPPORTED_FORMATS` 中添加格式，实现对应的 `_export_xxx` 方法
-2. **新增 Agent 子任务**：在 `agent.py` 中添加子任务方法，并在 `run_export_workflow` 中编排
-3. **新增自定义命令**：在 `commands.py` 的 `_register_commands` 中注册新命令
-4. **支持多数据库**：`database.py` 抽象为接口，可扩展支持 MySQL/PostgreSQL
-5. **集成真实 AI**：将自然语言转 SQL 的能力接入 Agent，实现"说人话 → 查数据 → 导出文件"
+- **复用而非重复造轮子**：导出接口完全复用查询校验、连接池、历史记录，不新增数据库连接路径。
+- **前后端双路径**：界面内即时导出（零请求）+ 服务端一键导出（适合 Agent/脚本）。
+- **纯函数核心**：序列化逻辑独立成纯函数，单元测试无需启动 FastAPI 或数据库。
+- **工程细节**：CSV BOM、RFC 4180 换行、JSON 日期安全序列化、大结果集确认、确定性文件名。
+- **AI 原生交互**：查询后主动询问导出，贴合作业要求；同时用 Claude 命令 + Cursor 规则 + CLI 三种方式覆盖自动化场景。

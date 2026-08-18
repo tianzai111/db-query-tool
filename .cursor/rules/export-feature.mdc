@@ -1,0 +1,44 @@
+---
+description: Guidance for the data-export feature of the Database Query Tool. Use whenever the user asks to export query results or extend the export module.
+globs: ["app/services/export.py", "app/api/v1/queries.py", "frontend/src/services/export.ts", "frontend/src/components/Export*.tsx"]
+alwaysApply: false
+---
+
+# Data Export Feature — Agent Task Decomposition
+
+When asked to "export data" or "run a query and export", break the work into
+the following independent subtasks (this is the Agent decomposition required
+by the assignment):
+
+1. **Get query results**
+   - Call `POST /api/v1/dbs/{name}/query` (to display) OR
+   - Call `POST /api/v1/dbs/{name}/export` (one-click, returns a file).
+   - Reuse `execute_query_with_service` — do NOT open a new DB connection.
+
+2. **Validate**
+   - Confirm the SQL is read-only (`SELECT`) via `validate_and_transform_sql`.
+   - Confirm there are rows to export; surface a friendly warning otherwise.
+
+3. **Format data**
+   - CSV: use `app/services/export.py::_to_csv` — UTF-8 with BOM, RFC 4180.
+   - JSON: use `_to_json` — include `metadata` (columns, SQL, row count,
+     execution time, timestamp) and `rows`.
+   - On the frontend use `frontend/src/services/export.ts`.
+
+4. **Create the file**
+   - Backend returns a `fastapi.Response` with
+     `Content-Disposition: attachment; filename="..."`.
+   - Filename format: `<db>_query_<UTC-timestamp>.<ext>`.
+
+5. **Report / summarise**
+   - Log the row count, file size and output path.
+   - In the UI, show the proactive prompt (`ExportPrompt.tsx`) after a query
+     returns rows: "Do you want to export as CSV or JSON?".
+
+## Rules
+
+- Prefer the single endpoint `/export` for automation (one round trip).
+- Never export non-SELECT statements.
+- Keep CSV BOM for Excel compatibility.
+- All new code must have matching tests (see `backend/tests/unit/test_export.py`).
+- Keep the camelCase API convention used by the rest of the project.
